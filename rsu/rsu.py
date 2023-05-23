@@ -10,6 +10,21 @@ import csv
 import math
 
 
+delays_logs_csv="delay_logs.csv"
+# Create a new CSV file with headers
+def create_csv_file(file_path, headers):
+    with open(file_path, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(headers)
+    print(f"CSV file '{file_path}' created with headers: {headers}")
+
+# Add a new row to the CSV file
+def add_row_to_csv(file_path, row_data):
+    with open(file_path, 'a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(row_data)
+    print(f"Row added to CSV file '{file_path}': {row_data}")
+
 def reverse_mapping(original_dict):
     reverse_dict = {}
 
@@ -66,7 +81,12 @@ class RSU:
         self.global_min_ts=-1
         self.broadcast_channel={}
         self.tile_to_slot = {}
-        self.rsu_pos=[-1.185770,36.906882]
+        self.bandwidth=10 #Given in MHz
+        self.mcs=14
+        num_elements = 10
+
+        self.delays=[None] * num_elements #need to initialise array before assigning values
+        self.rsu_pos=[36.906882,-1.185770]
         self.tile_props={"osm":[1,5],"pcd":[2,0.3],"pcd_mid":[2,2]}
         self.tile_schedule={}
         self._loop = asyncio.get_event_loop()
@@ -77,6 +97,8 @@ class RSU:
         # Start the daemon thread to print "Hello"
         self._hello_thread = threading.Thread(target=self._print_broadcast, daemon=True)
         self._hello_thread.start()
+
+    
     
     def initialise_broadcast_channel_with_segment(self):
         #broadcast_channel={}
@@ -104,6 +126,95 @@ class RSU:
         self.table.append(column2)
         self.data_transposed = list(map(list, zip(*self.table)))
         #print(self.data_transposed)
+
+    def calculate_transmit_delay_at_vehicle(self,request):
+        #time to acquire channel
+        #time to put data onto the channel
+        time_to_acquire_channel=0
+        packet_size=0#"size of request packet"
+        data_rate=1#uplink data rate
+        transmit_time=packet_size/data_rate
+        return transmit_time
+
+    def calculate_propagation_delay_from_vehicle_to_rsu(self,request):
+        #time at which request for received at RSU-time at which request was sent
+        #distance between RSU and vehicle when the request was sent/speed of light
+        veh_lat=request[2]
+        veh_long=request[3]
+        #veh_speed=float(request[4]) if float(request[4])!=0.0 else 0.1
+        speed_of_light=3*10**8
+        #TO DO:Change the vehicle lat and long to, converted tile lat and long.
+        distance=(calculate_distance(self.rsu_pos[0],self.rsu_pos[1],veh_lat,veh_long))
+        self.delays[9]=distance
+        print("Distance between vehicle and RSU",distance)
+        propagation_delay=distance/speed_of_light
+        print("time to reach tile", propagation_delay)
+        #return time_to_reach_tile
+        
+        return propagation_delay
+    
+    def calculate_processing_delay_at_RSU(self):
+        #Time to acquire channel, assumed to be 0
+        #Time to schedule a requested tile using algo. TO DO: Run mergesort with 200 elements.
+        #Tx= packet size/PHY data rate
+        #MIMO=8
+        packet_size=float(12*(2**10)*8)  #12KB assumed per 1ms.
+        #transmit_time=packet_size/100
+        #per request it will be neglglible
+        process_delay=0.0008 #around 0.8 milliseconds for mergesort on 200 elements.
+        downlink_phy_rate=100*10e6#100Mbps if 8x8 MIMO, MCS=14
+        transmit_delay=packet_size/downlink_phy_rate
+        process_transmit_delay=transmit_delay+process_delay
+        self.delays[5]=process_delay
+        self.delays[6]=transmit_delay
+        print("Transmit delay",transmit_delay)
+        return process_transmit_delay
+    
+    def calculate_propagation_delay_from_rsu_to_vehicle(self,request):
+        veh_lat=request[2]
+        veh_long=request[3]
+        veh_speed=float(request[4]) if float(request[4])!=0.0 else 0.1
+        #TO DO:Add the drifted Lat and Long.
+        speed_of_light=3e8
+        propagation_delay=(calculate_distance(self.rsu_pos[0],self.rsu_pos[1],veh_lat,veh_long))/speed_of_light
+        
+        additional_delay=(calculate_distance(self.rsu_pos[0],self.rsu_pos[1],veh_lat,veh_long))/veh_speed
+        print("additional delay",additional_delay)
+        print("time to reach tile", propagation_delay)
+        #return time_to_reach_tile
+        
+        return propagation_delay
+    
+    def calculate_total_delay_without_pr(self,request):
+        a=self.calculate_transmit_delay_at_vehicle(request)
+        self.delays[3]=a
+        b=self.calculate_propagation_delay_from_vehicle_to_rsu(request)
+        self.delays[4]=b
+        #c=self.calculate_processing_delay_at_RSU()
+        self.delays[5]=0.0
+        self.delays[6]=0.0
+        d=self.calculate_propagation_delay_from_rsu_to_vehicle(request)
+        self.delays[7]=d
+        total_delay_per_request=a+b+d
+        self.delays[8]=total_delay_per_request
+        #print("Total delay per request",a,b,d,total_delay_per_request) 
+        return total_delay_per_request
+    
+    def calculate_total_delay_with_pr(self,request):
+        a=self.calculate_transmit_delay_at_vehicle(request)
+        self.delays[3]=a
+        b=self.calculate_propagation_delay_from_vehicle_to_rsu(request)
+        self.delays[4]=b
+        c=self.calculate_processing_delay_at_RSU()
+        d=self.calculate_propagation_delay_from_rsu_to_vehicle(request)
+        self.delays[7]=d
+        total_delay_per_request=a+b+c+d
+        self.delays[8]=total_delay_per_request
+        #print("Total delay per request",a,b,c,d,total_delay_per_request) 
+        return total_delay_per_request
+
+
+
 
     def initialise_broadcast_channel_with_grid(self):
         
@@ -166,7 +277,7 @@ class RSU:
         current_time=time.time()
         currrent_slot=int(current_time-self.global_min_ts)
         wait_time=slot_when_tile_published_next-currrent_slot
-        print("WAit time",wait_time)
+        print("Wait time",wait_time)
         return wait_time
 
     def calculate_time_to_reach_requested_tile(self,request):
@@ -175,7 +286,7 @@ class RSU:
         veh_lat=request[2]
         veh_long=request[3]
         veh_speed=float(request[4]) if float(request[4])!=0.0 else 0.1
-        
+        #TO DO:Change the vehicle lat and long to, converted tile lat and long.
         time_to_reach_tile=(calculate_distance(self.rsu_pos[0],self.rsu_pos[1],veh_lat,veh_long))/veh_speed
         print("time to reach tile", time_to_reach_tile)
         return time_to_reach_tile
@@ -183,37 +294,90 @@ class RSU:
     def add_tile_to_current_slot(self,tile_name):
         tile_to_slot = reverse_mapping(self.broadcast_channel)
         self.broadcast_channel[self.current_slot_time],self.broadcast_channel[tile_to_slot[tile_name][0]]=self.broadcast_channel[tile_to_slot[tile_name][0]],self.broadcast_channel[self.current_slot_time]
-        
+    
+
+
+
+    def add_tile_to_slot_based_on_priority(self,request,jobs):
+        #jobs=[['tile_name',deadline, priority]]
+        jobs = [['a', 2, 100], ['b', 1, 40], ['c', 2, 80], ['d', 1, 20], ['e', 3, 60]]
+        print("Following is maximum profit sequence of jobs")
+
+        # length of array
+        n = len(jobs)
+        t = 3
+
+        # Sort all jobs according to
+        # decreasing order of profit
+        for i in range(n):
+            for j in range(n - 1 - i):
+                if jobs[j][2] < jobs[j + 1][2]:
+                    jobs[j], jobs[j + 1] = jobs[j + 1], jobs[j]
+
+        # To keep track of free time slots
+        result = [False] * t
+
+        # To store result (Sequence of jobs)
+        job = ['-1'] * t
+
+        # Iterate through all given jobs
+        for i in range(len(jobs)):
+
+            # Find a free slot for this job
+            # (Note that we start from the
+            # last possible slot)
+            for j in range(min(t - 1, jobs[i][1] - 1), -1, -1):
+
+                # Free slot found
+                if result[j] is False:
+                    result[j] = True
+                    job[j] = jobs[i][0]
+                    break
+
+        # print the sequence
+        print(job)
+
     def tobroadcast(self,request):
         #to decide whether to broadcast tile or not
         #request=request.decode()
         request=request.split(",")
+        req_id=request[0].split(":")[1]
+        print("Request id",req_id)
         veh_id=request[1]
         veh_lat=request[2]
         veh_long=request[3]
         veh_speed=request[4]
         tile_name=request[5]+','+request[6]
         req_timestamp=request[7]
+        
         print("tile_name inside tobroadcast",tile_name)
         if self.broadcast_channel[self.current_slot_time]==tile_name:
             #do nothing
             return
         else:
+            self.delays[0]=req_id
+            self.delays[1]=veh_id
+            self.delays[2]=tile_name
             validity=self.get_validity_of_tile(tile_name)
             slot_when_tile_published_next=self.get_slot_when_tile_published_next(tile_name)
             wait_time=self.calculate_wait_time(slot_when_tile_published_next)
             time_to_reach_tile=self.calculate_time_to_reach_requested_tile(request)
+            
             if wait_time < validity and wait_time < time_to_reach_tile:
                 #increase priority
                 #do nothing, vehicle can wait
-                pass
+                total_delay=self.calculate_total_delay_without_pr(request)
+
+                print("total delay without processing delay",total_delay)
             else:
                 #TO DO:search for a slot before the validity expires
                 #weighted job scheduling greedy algo
                 print("tile replaced this tile %s by this tile%s in slot %s",self.broadcast_channel[self.current_slot_time],tile_name, self.current_slot_time)
                 self.add_tile_to_current_slot(tile_name)#urgent scheduling
 
+                print("Total delay",self.calculate_total_delay_with_pr(request))
 
+            add_row_to_csv(delays_logs_csv,self.delays)
         print()
 
     async def _handle_request(self, request):
@@ -241,12 +405,17 @@ class RSU:
 
 def main(id,sip,sport,algo,pattern):
     # rsu = RSU(1,'127.0.0.1',5555,'flat','block')
+    # Create a new CSV file
+    delay_logs_csv = 'delay_logs.csv'
+    headers = ['Req_ID', 'Veh_ID', 'Tile_name','Tx1','P1','Pr1','Tx2','P2','Total delay','Distance']
+    create_csv_file(delay_logs_csv, headers)
     rsu = RSU(id,sip,sport,algo,pattern)
 
     asyncio.run(rsu.run())
 
-if __name__ == "__main__":
-    rsu = RSU(1,'127.0.0.1',5555,'flat','block')
-    asyncio.run(rsu.run())
+#Uncomment when RSU to be tested standalone
+# if __name__ == "__main__":
+#     rsu = RSU(1,'127.0.0.1',5555,'flat','block')
+#     asyncio.run(rsu.run())
 
 

@@ -7,17 +7,12 @@ from vehicle import vehicle
 
 def rsu_main(args: argparse.Namespace):
 
-    #object=file.classname
-    # rsu_o=rsu.RSU(args.id, args.sip,args.sport, args.algo, args.pattern)
-    #object.function name
-    # rsu_o.rsu_script()
     rsu.main(args.id, args.sip,args.sport, args.algo, args.pattern)
 
 
 def vehicle_main(args:argparse.Namespace):
-    # vehicle_o=vehicle.Vehicle(args.pip,args.pport,args.input_file)
-    # vehicle_o.veh_script()
-    vehicle.main(args.id,args.pip,args.pport,args.input_file)
+    
+    vehicle.main(args.id,args.pip,args.pport,args.cache_size,args.input_file)
 
 
 if __name__ == "__main__":
@@ -36,6 +31,7 @@ if __name__ == "__main__":
     parser_client.add_argument('--id', metavar='vehicle_id', type=int, help='identifier for the vehicle')
     parser_client.add_argument('--pip', metavar='parent_ip', help='parent rsu ip to which vehicle is connected')
     parser_client.add_argument('--pport', metavar='parent_port', type=int, help='parent rsu port to which vehicle is connected')
+    parser_client.add_argument('--cache_size', metavar='cache_size', type=int, help='size of the cache, signifying the number of tiles it can store')
     parser_client.add_argument('--input_file', metavar='input_csv_file', help='Input CSV file consisting of the vehicle routes')
     #TO DO: can also take in number of vehicles as argument.
 

@@ -7,63 +7,68 @@ import time
 
 #tile_props={"format/tile_type":["size(in units of cache)","validity(in seconds)"]}
 tile_props={"osm":[1,2],"pcd":[2,2],"pcd_mid":[2,2]}
-veh_cache={}
-max_length=2
+
 
 
 class Vehicle:
-    def __init__(self, id,pip,pport,input_file):
+
+    def __init__(self, id, pip, pport, cache_size, input_file):
         self.id = id
-        self.pip=pip
-        self.pport=pport
-        self.input_file=input_file
+        self.pip = pip
+        self.pport = pport
+        self.input_file = input_file
+        self.veh_cache={}
+        self.max_length=cache_size
 
     async def send_request(self, request):
+
+        #Create socket and send request to RSU
         context = zmq.asyncio.Context()
         socket = context.socket(zmq.REQ)
-        #socket.connect("tcp://localhost:5555")
         socket.connect('tcp://%s:%s'%(self.pip,self.pport))
         await socket.send(request)
 
-        time.sleep(1)
+        #request is sent every second
+        #time.sleep(1)#TO DO:send the requests based on the timestamp
         response = await socket.recv()
-        socket.close()  # close the socket after each request
+
+        # close the socket after each request
+        socket.close()  
         return response
     
     async def process_response(self, response):
-        # Process the response here
-        #print(f"Vehicle {self.id} received response: {response.decode()}")
-        print()
-        #print("from ip and port",self.pip, self.pport)
-    
-    
+        pass
+        #print()
     
     async def client(self,message):
-        #while True:
-            # Send a request
-            # request = f"Vehicle {self.id} request".encode()
-            request = f"{message}".encode()
-
-            response = await self.send_request(request)
-
             
+            # Send a request
+            request = f"{message}".encode()
+            response = await self.send_request(request)
 
             # Process the response
             await self.process_response(response)
 
-
-
     def isTileValid(self,tile):
-        #my_string = '(10, 10)_9_8_osm'
-        tiles=veh_cache[self.id]
+        #Fetch the tiles list for a vehicle ID
+        tiles=self.veh_cache[self.id]
+
+        #Iterate through all tiles in the cache for a vehicle ID
+        #t[0] since veh_cache={vehicle_id:[tile_name, tiled_time],[],..maxlength}
         for t in tiles:
             if t[0] == tile:
                 tiledTime=float(t[1])
+
+        #Get the last part of the tile name which indicates tile type
+        #Eg: '(10, 10)_9_8_osm' where osm is the type
         type = tile.split('_')[-1]
+
+        #Calculate current time
         currentTime=time.time()
-        #tiledTime=float(veh_cache[vehicle_id][1])
+        
         remainingTime =currentTime-tiledTime
-        #print("Vehicle ID, Tile name, Tiled Time, Current Time, remaining TIme, validity",vehicle_id, tiledTime, currentTime, remainingTime, tile_props[type][1])
+                
+        #If tile validity is greater than the remaining time, return True, else return False
         if(tile_props[type][1]> remainingTime):
             #print("Tile valid returned!")
             return True
@@ -71,48 +76,63 @@ class Vehicle:
             #print("Tile invalid returned!")
             return False
         
-    async def update_cache(self,vehicle_id, tile_name,max_length,time_step,payload):
-        # get the current timestamp
-        print(veh_cache)
-        print("Payload",payload)
+    async def update_cache(self, vehicle_id, tile_name, max_length, time_step, payload):
+
+
+        print(self.veh_cache)
+
+        #Get the current timestamp
         curr_timestamp = time.time()
-        #print("INSIDE UPDATE CACHE!")
+
+        
         # check if vehicle_id exists in cache
-        #print("Vehicle id inside update cache!",vehicle_id)
-        if vehicle_id in veh_cache :#and isTileValid(tile_name):
-            # check if tile already exists in cache
-            for tile in veh_cache[vehicle_id]:
+        
+        if vehicle_id in self.veh_cache :
+
+            #Iterate over all tiles in the cache for that vehicle ID, to check if the tile exists
+            for tile in self.veh_cache[vehicle_id]:
+
+                # check if tile already exists in cache
                 if tile[0] == tile_name:
-                    #print("Tile exists?", tile_name,veh_cache[vehicle_id])
-                    print("Tile in if exists",tile_name)
+
+                    #print("Tile in if exists",tile_name)
+
                     if self.isTileValid(tile_name):
-                        #print("Is tile valid called!")
-                        print("Tile in if exists and is valid",tile_name)
-                        return # do nothing if tile already exists in cache
+                        
+                        #print("Tile in if exists and is valid",tile_name)
+                        # do nothing if tile already exists in cache
+                        return 
+                    
                     else:
-                        #request RSU
-                        print("Tile in if exists but invalid",tile_name)
+
+                        #print("Tile in if exists but invalid",tile_name)
+                        #If tile exists in cache, but is invalid, request RSU for the tile
+                        
+                        #Create the payload to be sent to the RSU, by appending the tile_name and the time at which the request is being sent
                         payload=payload+','+tile_name+','+str(time.time())
 
                         await self.client(payload)
 
-                        #print("Requesting RSU for tile due to invalidity!")
-                        if len(veh_cache[vehicle_id]) >= max_length:
-                            print("Tile in if exists but invalid and no space in cache",tile_name)
+                        #Requesting RSU for tile due to invalidity!
+                        if len(self.veh_cache[vehicle_id]) >= max_length:
+                            #print("Tile in if exists but invalid and no space in cache",tile_name)
+
                             # remove the least recently used tile
-                            veh_cache[vehicle_id].pop(0)
+                            self.veh_cache[vehicle_id].pop(0)
 
                             # add the new tile to cache
-                            veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+                            self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
                         else:
-                            # create a new entry for vehicle_id in cache
+
+                            #create a new entry for vehicle_id in cache
                             #send a request to the RSU
-                            print("Tile in if exists but invalid and has space in cache",tile_name)
-                        # add the new tile to cache
-                            veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+                            #print("Tile in if exists but invalid and has space in cache",tile_name)
+                            #add the new tile to cache
+                            self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
                 else:
-                    #request RSU
-                    print("Tile in if not in cache",tile_name)
+                    
+                    #Create the payload to be sent to the RSU, by appending the tile_name and the time at which the request is being sent
+                    #print("Tile in if not in cache",tile_name)
                     payload=payload+','+tile_name+','+str(time.time())
                     #print("Inside tile not exists in cache!")
                     await self.client(payload)
@@ -120,27 +140,29 @@ class Vehicle:
                     
                     #print("Requesting RSU for tile due to absence of tile in cache!")
                     # add the new tile to cache
-                    if len(veh_cache[vehicle_id]) == max_length:
+                    if len(self.veh_cache[vehicle_id]) == max_length:
                         # remove the least recently used tile
-                        print("Tile in not exists in cache and no space in cache",tile_name)
-                        veh_cache[vehicle_id].pop(0)
+                        #print("Tile in not exists in cache and no space in cache",tile_name)
+                        self.veh_cache[vehicle_id].pop(0)
 
                         # add the new tile to cache
-                        veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+                        self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
                     else:
                         # create a new entry for vehicle_id in cache
                         #send a request to the RSU
-                        print("Tile in if exists but invalid and has space in cache",tile_name)
+                        #print("Tile in if exists but invalid and has space in cache",tile_name)
                         # add the new tile to cache
-                        veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+                        self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
         else:
-            print("Tile in if new vehicle addded",tile_name)
+            #If a new vehicle is added, then request for that tile
+            #print("Tile in if new vehicle addded",tile_name)
             payload=payload+','+tile_name+','+str(time.time())
             #print("Inside tile not exists in cache!")
             await self.client(payload)
-            veh_cache[vehicle_id] = [[tile_name, curr_timestamp]]
+            self.veh_cache[vehicle_id] = [[tile_name, curr_timestamp]]
         
 
+    #Function takes in latitudes, longitudes and matrix shape and gives i, j for a matrix where a particular point lies
     def scale_to_indices(self,latitudes, longitudes, matrix_shape):
         min_lat = np.min(latitudes)
         max_lat = np.max(latitudes)
@@ -162,6 +184,7 @@ class Vehicle:
 
         return indices
 
+    #Using the indices from the above function to create tiles and add it to the csv file
     def add_indices_to_csv(self,file_path, matrix_shape):
         # Load the CSV file into a Pandas DataFrame
         df = pd.read_csv(file_path)
@@ -191,7 +214,7 @@ class Vehicle:
     async def main(self):
         
         self.add_indices_to_csv('short_datatotest.csv', (10, 10))
-        with open('short_datatotest.csv') as csv_file:
+        with open('sumo_longtrace.csv') as csv_file:
             csv_reader = csv.reader(csv_file, delimiter=',')
             next(csv_reader)
             for row in csv_reader:
@@ -207,15 +230,16 @@ class Vehicle:
                 for i in range(2):
                     #print("This is list",lst[i])
 
-                    await self.update_cache(self.id, lst[i], max_length,time_step,payload)
+                    await self.update_cache(self.id, lst[i], self.max_length,time_step,payload)
 
-def main(id,pip,pport,input_file):
-    # vehicle1 = Vehicle(1,'127.0.0.1',5555,'hello')
-    vehicle1 = Vehicle(id,pip,pport,input_file)
+def main(id,pip,pport,cache_size,input_file):
+    #vehicle1 = Vehicle(1,'127.0.0.1',5555,'hello')
+    vehicle1 = Vehicle(id,pip,pport,cache_size,input_file)
     asyncio.run(vehicle1.main())
 
 
+#Uncomment this when running vehicle standalone
 
-if __name__ == "__main__":
-    vehicle1 = Vehicle(1,'127.0.0.1',5555,'hello')
-    asyncio.run(vehicle1.main())
+# if __name__ == "__main__":
+#     vehicle1 = Vehicle(1,'127.0.0.1',5555,'hello')
+#     asyncio.run(vehicle1.main())
