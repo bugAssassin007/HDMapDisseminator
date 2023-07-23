@@ -9,7 +9,6 @@ import time
 tile_props={"osm":[1,2],"pcd":[2,2],"pcd_mid":[2,2]}
 
 
-
 class Vehicle:
 
     def __init__(self, id, pip, pport, cache_size, input_file):
@@ -29,7 +28,7 @@ class Vehicle:
         await socket.send(request)
 
         #request is sent every second
-        #time.sleep(1)#TO DO:send the requests based on the timestamp
+        time.sleep(1)#TO DO:send the requests based on the timestamp
         response = await socket.recv()
 
         # close the socket after each request
@@ -52,7 +51,7 @@ class Vehicle:
     def isTileValid(self,tile):
         #Fetch the tiles list for a vehicle ID
         tiles=self.veh_cache[self.id]
-
+        print("tiles in vehicle", tiles)
         #Iterate through all tiles in the cache for a vehicle ID
         #t[0] since veh_cache={vehicle_id:[tile_name, tiled_time],[],..maxlength}
         for t in tiles:
@@ -66,10 +65,11 @@ class Vehicle:
         #Calculate current time
         currentTime=time.time()
         
-        remainingTime =currentTime-tiledTime
+        #remainingTime = currentTime-tiledTime
+        timePassed = currentTime-tiledTime
                 
         #If tile validity is greater than the remaining time, return True, else return False
-        if(tile_props[type][1]> remainingTime):
+        if(tile_props[type][1] - timePassed > 0):
             #print("Tile valid returned!")
             return True
         else:
@@ -117,11 +117,13 @@ class Vehicle:
                         if len(self.veh_cache[vehicle_id]) >= max_length:
                             #print("Tile in if exists but invalid and no space in cache",tile_name)
 
-                            # remove the least recently used tile
+                            # remove the least recently used tile, removing the first stored tile.
                             self.veh_cache[vehicle_id].pop(0)
 
                             # add the new tile to cache
                             self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+
+                            #TO DO: Check if sorting is required to fetch the least recently used.
                         else:
 
                             #create a new entry for vehicle_id in cache
@@ -159,6 +161,8 @@ class Vehicle:
             payload=payload+','+tile_name+','+str(time.time())
             #print("Inside tile not exists in cache!")
             await self.client(payload)
+
+            #TO DO: Check if there is a drastic change in calculation of the current timestamp upwards and here.
             self.veh_cache[vehicle_id] = [[tile_name, curr_timestamp]]
         
 
@@ -243,3 +247,4 @@ def main(id,pip,pport,cache_size,input_file):
 # if __name__ == "__main__":
 #     vehicle1 = Vehicle(1,'127.0.0.1',5555,'hello')
 #     asyncio.run(vehicle1.main())
+#Vehicle(int id, const std::string& pip, const std::string& pport, int cache_size, const std::string& input_file)

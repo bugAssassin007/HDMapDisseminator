@@ -8,9 +8,13 @@ import time
 from tabulate import tabulate
 import csv
 import math
+import sys
+from collections import OrderedDict
 
 
-delays_logs_csv="delay_logs.csv"
+delay_logs_priority="delay_logs_priority.csv"
+delay_logs_basic="delay_logs_basic.csv"
+delay_logs_greedy="delay_logs_greedy.csv"
 # Create a new CSV file with headers
 def create_csv_file(file_path, headers):
     with open(file_path, 'w', newline='') as file:
@@ -78,17 +82,39 @@ class RSU:
         self.pattern=pattern
         self.table=[]
         self.data_transposed=[]
+        self.jobs={}
         self.global_min_ts=-1
         self.broadcast_channel={}
         self.tile_to_slot = {}
         self.bandwidth=10 #Given in MHz
         self.mcs=14
         num_elements = 10
-
+        self.time_to_reach_tile=0
+        self.deadline=0
+        self.priority=0#can be defined as the reciprocal of deadline
+        self.profits=0#
+        self.frequency=1
+        #self.request=""
+        self.req_id=""
         self.delays=[None] * num_elements #need to initialise array before assigning values
         self.rsu_pos=[36.906882,-1.185770]
-        self.tile_props={"osm":[1,5],"pcd":[2,0.3],"pcd_mid":[2,2]}
+        #self.tile_props={"osm":[1,5,3],"pcd":[2,0.3,1],"pcd_mid":[2,2,2]}
+        self.tile_props={"osm":[1,2,10],"pcd":[2,1,10],"pcd_mid":[2,2,2]}
+        #tile_request_props={"tile_name":[frequency]}
+        self.tile_req_props={}
         self.tile_schedule={}
+        self.jobs=[[]]
+        self.global_jobs={}
+        self.hits_with_basic=[]
+        self.misses_with_basic=[]
+        self.hits_with_greedy=[]
+        self.misses_with_greedy=[]
+        self.hits_with_priority=[]
+        self.misses_with_priority=[]
+        # List to store replaced tile pairs
+        self.replaced_tiles = []  
+        # List to store tiles that cannot be scheduled due to unavailability
+        self.cannot_be_scheduled = []
         self._loop = asyncio.get_event_loop()
         self._context = zmq.asyncio.Context()
         self._socket = self._context.socket(zmq.REP)
@@ -110,10 +136,17 @@ class RSU:
                 slot_number = int(row[0])
                 tile_name = row[1]
                 self.broadcast_channel[slot_number] = tile_name
+                self.tile_req_props[tile_name]=[0]
 
             # Create empty lists to store the data
             column1 = []
             column2 = []
+        
+        #for tile_name in self.broadcast_channel.values():
+        #     self.tile_req_props[tile_name]=[0]
+
+        for key,val in self.tile_req_props:
+            print(key,val)
                     
         # Loop through the dictionary items
         for slot_number, tile_name in self.broadcast_channel.items():
@@ -170,6 +203,25 @@ class RSU:
         print("Transmit delay",transmit_delay)
         return process_transmit_delay
     
+    def calculate_processing_delay_at_RSU_for_greedy(self):
+        #would it be different from the above function??
+        #Time to acquire channel, assumed to be 0
+        #Time to schedule a requested tile using algo. TO DO: Run mergesort with 200 elements.
+        #Tx= packet size/PHY data rate
+        #MIMO=8
+        packet_size=float(12*(2**10)*8)  #12KB assumed per 1ms.
+        #transmit_time=packet_size/100
+        #per request it will be neglglible
+        #process_delay=0.0008 #around 0.8 milliseconds for mergesort on 200 elements.
+        process_delay=0.0016#for accessing channel and scheduling immediately.
+        downlink_phy_rate=100*10e6#100Mbps if 8x8 MIMO, MCS=14
+        transmit_delay=packet_size/downlink_phy_rate
+        process_transmit_delay=transmit_delay+process_delay
+        self.delays[5]=process_delay
+        self.delays[6]=transmit_delay
+        print("Transmit delay",transmit_delay)
+        return process_transmit_delay
+    
     def calculate_propagation_delay_from_rsu_to_vehicle(self,request):
         veh_lat=request[2]
         veh_long=request[3]
@@ -214,6 +266,19 @@ class RSU:
         return total_delay_per_request
 
 
+    def calculate_total_delay_with_pr_for_greedy(self,request):
+        a=self.calculate_transmit_delay_at_vehicle(request)
+        self.delays[3]=a
+        b=self.calculate_propagation_delay_from_vehicle_to_rsu(request)
+        self.delays[4]=b
+        c=self.calculate_processing_delay_at_RSU_for_greedy()
+        d=self.calculate_propagation_delay_from_rsu_to_vehicle(request)
+        self.delays[7]=d
+        total_delay_per_request=a+b+c+d
+        self.delays[8]=total_delay_per_request
+        #print("Total delay per request",a,b,c,d,total_delay_per_request) 
+        return total_delay_per_request
+
 
 
     def initialise_broadcast_channel_with_grid(self):
@@ -231,7 +296,9 @@ class RSU:
                 tile_name = f"(10, 10)_{x}_{y}_pcd"
                 self.broadcast_channel[slot_number] = tile_name
                 slot_number += 1
-        
+
+        for tile_name in self.broadcast_channel.values():
+            self.tile_req_props[tile_name]=[0]
 
         # Create empty lists to store the data
         column1 = []
@@ -270,13 +337,19 @@ class RSU:
     def get_slot_when_tile_published_next(self,tile_name):
         tile_to_slot = reverse_mapping(self.broadcast_channel)
 
-        print("slot when tile published",min(tile_to_slot[tile_name]))
-        return min(tile_to_slot[tile_name])
+        # print("slot when tile published",min(tile_to_slot[tile_name]))
+        # return min(tile_to_slot[tile_name])
+        if tile_name in tile_to_slot:
+            print("Slot when tile published:", min(tile_to_slot[tile_name]))
+            return min(tile_to_slot[tile_name])
+        else:
+            #or should I return 0?
+            return sys.maxsize
     
     def calculate_wait_time(self,slot_when_tile_published_next):
-        current_time=time.time()
-        currrent_slot=int(current_time-self.global_min_ts)
-        wait_time=slot_when_tile_published_next-currrent_slot
+        current_time = time.time()
+        currrent_slot = int(current_time - self.global_min_ts)
+        wait_time = slot_when_tile_published_next - currrent_slot
         print("Wait time",wait_time)
         return wait_time
 
@@ -287,58 +360,270 @@ class RSU:
         veh_long=request[3]
         veh_speed=float(request[4]) if float(request[4])!=0.0 else 0.1
         #TO DO:Change the vehicle lat and long to, converted tile lat and long.
-        time_to_reach_tile=(calculate_distance(self.rsu_pos[0],self.rsu_pos[1],veh_lat,veh_long))/veh_speed
-        print("time to reach tile", time_to_reach_tile)
-        return time_to_reach_tile
+        self.time_to_reach_tile=(calculate_distance(self.rsu_pos[0],self.rsu_pos[1],veh_lat,veh_long))/veh_speed
+        print("time to reach tile", self.time_to_reach_tile)
+
+        return self.time_to_reach_tile
 
     def add_tile_to_current_slot(self,tile_name):
         tile_to_slot = reverse_mapping(self.broadcast_channel)
         self.broadcast_channel[self.current_slot_time],self.broadcast_channel[tile_to_slot[tile_name][0]]=self.broadcast_channel[tile_to_slot[tile_name][0]],self.broadcast_channel[self.current_slot_time]
     
+    # def add_tile_to_slot_based_on_priority(self, tile_name, slot):
+    #     tile_to_slot = reverse_mapping(self.broadcast_channel)
+    #     self.broadcast_channel[slot],self.broadcast_channel[tile_to_slot[tile_name][0]]=self.broadcast_channel[tile_to_slot[tile_name][0]],self.broadcast_channel[slot]
 
 
 
-    def add_tile_to_slot_based_on_priority(self,request,jobs):
-        #jobs=[['tile_name',deadline, priority]]
-        jobs = [['a', 2, 100], ['b', 1, 40], ['c', 2, 80], ['d', 1, 20], ['e', 3, 60]]
-        print("Following is maximum profit sequence of jobs")
+    def add_tile_to_jobs_list_based_on_priority(self,request):
+        #jobs=[['tile_name',deadline, priority,isScheduled?]]
+        #TO DO: pcd starvation occurs, new algorithm to handle this tradeoff.
+        # or if we dont want starvation to occur, how is the performance.
+        #request=request.split(",")
+        self.req_id=request[0].split(":")[1]
+        print("Request id",self.req_id)
+        veh_id=request[1]
+        veh_lat=request[2]
+        veh_long=request[3]
+        veh_speed=request[4]
+        tile_name=request[5]+','+request[6]
+        req_timestamp=request[7]
+        deadline=self.calculate_time_to_reach_requested_tile(request)
+        priority=self.tile_props[tile_name.split('_')[3]]
 
-        # length of array
-        n = len(jobs)
-        t = 3
+        # Create a new job entry
+        job_entry = [priority, deadline, 0, 0]  # [priority, deadline, isscheduled, isprocessed]
+        # Add the job to the global list of jobs
+        self.global_jobs[tile_name] = job_entry
 
-        # Sort all jobs according to
-        # decreasing order of profit
-        for i in range(n):
-            for j in range(n - 1 - i):
-                if jobs[j][2] < jobs[j + 1][2]:
-                    jobs[j], jobs[j + 1] = jobs[j + 1], jobs[j]
+        # Update the tile_req_props dictionary
+        if tile_name not in self.tile_req_props:
+            self.tile_req_props[tile_name] = [0]
 
-        # To keep track of free time slots
-        result = [False] * t
+        # Sort the jobs in descending order based on priority and deadline
+        sorted_jobs = sorted(self.global_jobs.items(), key=lambda x: (x[1][0], x[1][1]), reverse=True)
 
-        # To store result (Sequence of jobs)
-        job = ['-1'] * t
+        # Update the global list with the sorted jobs
+        self.global_jobs.clear()
+        self.global_jobs.update(sorted_jobs)
 
-        # Iterate through all given jobs
-        for i in range(len(jobs)):
+        #return self.jobs
 
-            # Find a free slot for this job
-            # (Note that we start from the
-            # last possible slot)
-            for j in range(min(t - 1, jobs[i][1] - 1), -1, -1):
+    
 
-                # Free slot found
-                if result[j] is False:
-                    result[j] = True
-                    job[j] = jobs[i][0]
-                    break
 
-        # print the sequence
-        print(job)
+    
+    def schedule_tile_at_slot(self):
+        #get current slot
+        #need a different function to check if a slot if free to tackle when the broadcast channel is initialised 
+        #with segment instead of the grid
+        #if the tile_type==osm:
+            #if(is_free_slot_found_before_deadline(deadline) || )
+        # Iterate through the global_jobs dictionary
+        for tile_name, job_entry in self.global_jobs.items():
+            priority = job_entry[0]
+            deadline = job_entry[1]
+            isscheduled = job_entry[2]
+            isprocessed = job_entry[3]
+            # Check if the tile has not been scheduled and is not yet processed
+            if isscheduled == 0 and isprocessed == 0:
+                tile_type = tile_name.split('_')[-1]  # Extract tile type from tile_name
+                if tile_type == "osm":
+                # Browse all slots in the broadcast_channel before the deadline
+                # to find an empty slot or a slot with a pcd tile
+                    for slot_name, slot_tile in self.broadcast_channel.items():
+                        ##TO DO: Change the condition after or, using reverse_broadcast_channel to find slot with pcd tile.
+                        if slot_tile == "" or slot_tile.split('_')[-1] == "pcd":
+                            # Replace the tile in the slot with the current tile
+                            self.replaced_tiles.append([tile_name, slot_tile])
+                            self.broadcast_channel[slot_name] = tile_name
+                            job_entry[2] = 1  # Set isscheduled flag to 1
+                            job_entry[3] = 1  # Set isprocessed flag to 1
 
-    def tobroadcast(self,request):
+                            request_tile= f"{self.req_id}:{tile_name}"
+                            if request_tile not in self.hits_with_priority:
+                                self.hits_with_priority.append(request_tile) 
+
+
+                            # Update the tile_req_props dictionary
+                            if slot_tile != "":
+                                self.tile_req_props[slot_tile][0] -= 1
+
+
+                            break
+                        else:
+                            # Find a slot before the deadline of type osm with lower frequency
+                            current_frequency = self.tile_req_props[tile_name][0]
+                            for slot_name, slot_tile in self.broadcast_channel.items():
+                                if slot_tile.split('_')[-1]=="osm" and self.tile_req_props[slot_tile][0] < current_frequency:
+                                    # Replace the tile in the slot with the current tile
+                                    self.replaced_tiles.append([tile_name, slot_tile])
+                                    self.broadcast_channel[slot_name] = tile_name
+                                    #self.hits_with_priority.append(tile_name)
+                                    job_entry[2] = 1  # Set isscheduled flag to 1
+                                    job_entry[3] = 1  # Set isprocessed flag to 1
+
+                                    request_tile= f"{self.req_id}:{tile_name}"
+                                    if request_tile not in self.hits_with_priority:
+                                        self.hits_with_priority.append(request_tile) 
+
+                                    break
+                                else:
+                                    self.cannot_be_scheduled.append(tile_name)
+                                    # Set isprocessed flag to 1
+                                    job_entry[3] = 1 
+                                    #self.misses_with_priority.append(tile_name)
+                                    request_tile= f"{self.req_id}:{tile_name}"
+                                    if request_tile not in self.misses_with_priority:
+                                        self.misses_with_priority.append(request_tile) 
+
+                                    
+
+
+
+
+                            #TO DO: Do you want to add a cannot be scheduled case? if yes use the below code
+                            #cannot_be_scheduled.append(tile_name)
+                            #job_entry[3] = 1  # Set isprocessed flag to 1
+                #if tile is pcd, can add more types by changing the else to elif tile_type=="pcd"
+                else:
+                    # Find a slot before the deadline with a pcd tile and lower frequency
+                    current_frequency = self.tile_req_props[tile_name][0]
+                    for slot_name, slot_tile in self.broadcast_channel.items():
+                        if slot_tile != "" and self.tile_req_props[slot_tile][0] < current_frequency:
+                            # Replace the tile in the slot with the current tile
+                            self.replaced_tiles.append([tile_name, slot_tile])
+                            self.broadcast_channel[slot_name] = tile_name
+                            #self.hits_with_priority.append(tile_name)
+                            job_entry[2] = 1  # Set isscheduled flag to 1
+                            job_entry[3] = 1  # Set isprocessed flag to 1
+                            request_tile= f"{self.req_id}:{tile_name}"
+                            if request_tile not in self.hits_with_priority:
+                                self.hits_with_priority.append(request_tile) 
+                            break
+                        else:
+                            self.cannot_be_scheduled.append(tile_name)
+                            # self.misses_with_priority.append(tile_name)
+                            job_entry[3] = 1  # Set isprocessed flag to 1
+                            request_tile= f"{self.req_id}:{tile_name}"
+                            if request_tile not in self.misses_with_priority:
+                                self.misses_with_priority.append(request_tile) 
+
+
+
+    def update_tile_frequency(self,tile_name):
+        if tile_name in self.tile_req_props:
+            self.tile_req_props[tile_name][0] += 1  # Increment frequency if tile exists
+        else:
+            self.tile_req_props[tile_name] = [1] #Add tile if not exitsts
+
+    def tobroadcast_greedy(self,request):
+        #schedule every tile current slot.
+     
+        request=request.split(",")
+        req_id=request[0].split(":")[1]
+        print("Request id",req_id)
+        veh_id=request[1]
+        veh_lat=request[2]
+        veh_long=request[3]
+        veh_speed=request[4]
+        tile_name=request[5]+','+request[6]
+        req_timestamp=request[7]
+        if self.broadcast_channel[self.current_slot_time]==tile_name:
+            #do nothing
+            #can count as a hit
+            self.hits_with_greedy.append(tile_name)
+            return
+        else:
+            self.delays[0]=req_id 
+            self.delays[1]=veh_id
+            self.delays[2]=tile_name
+            validity=self.get_validity_of_tile(tile_name)
+            slot_when_tile_published_next=self.get_slot_when_tile_published_next(tile_name)
+            wait_time=self.calculate_wait_time(slot_when_tile_published_next)
+            self.time_to_reach_tile=self.calculate_time_to_reach_requested_tile(request)
+            self.deadline=self.current_slot_time+(self.time_to_reach_tile-self.global_min_ts)
+            self.priority=self.tile_props[self.delays[2].split("_")[-1]][2]
+            self.profit=(1/self.deadline)+self.priority
+            if wait_time < validity and wait_time < self.time_to_reach_tile:
+                #increase frequency
+                #self.tile_request_props[tile_name]+=1
+                self.update_tile_frequency(tile_name)
+                #do nothing, vehicle can wait
+                total_delay=self.calculate_total_delay_with_pr(request)+wait_time
+                self.hits_with_greedy.append(tile_name)
+
+                print("total delay without processing delay",total_delay)
+            else:
+                self.add_tile_to_current_slot(tile_name)
+                total_delay=self.calculate_total_delay_with_pr_for_greedy(request)
+                #self.misses_with_greedy.append(tile_name)
+                self.hits_with_greedy.append(tile_name)
+
+
+        add_row_to_csv(delay_logs_greedy,self.delays)    
+        print("No. of misses with greedy are ", len(self.misses_with_greedy))
+        print("No. of hits with greedy are ", len(self.hits_with_greedy))
+        print(self.global_jobs)
+                                                                 
+
+        
+
+    def tobroadcast_basic(self,request):
+        reversed_broadcast_channel = OrderedDict((len(self.broadcast_channel) - i, tile) for i, tile in self.broadcast_channel.items())
+        self.broadcast_channel=OrderedDict((len(reversed_broadcast_channel) - i, tile) for i, tile in reversed_broadcast_channel.items())
+        
+        #normal broadcast, every tile is broadcasted once only.
+        request=request.split(",")
+        req_id=request[0].split(":")[1]
+        print("Request id",req_id)
+        veh_id=request[1]
+        veh_lat=request[2]
+        veh_long=request[3]
+        veh_speed=request[4]
+        tile_name=request[5]+','+request[6]
+        req_timestamp=request[7]
+        if self.broadcast_channel[self.current_slot_time]==tile_name:
+
+            #do nothing
+            total_delay=self.calculate_total_delay_without_pr(request)
+            self.hits_with_basic.append(tile_name)
+
+
+            #can count as a hit
+            return
+        else:
+            self.delays[0]=req_id 
+            self.delays[1]=veh_id
+            self.delays[2]=tile_name
+            validity=self.get_validity_of_tile(tile_name)
+            slot_when_tile_published_next=self.get_slot_when_tile_published_next(tile_name)
+            wait_time=self.calculate_wait_time(slot_when_tile_published_next)
+            self.time_to_reach_tile=self.calculate_time_to_reach_requested_tile(request)
+            self.deadline=self.current_slot_time+(self.time_to_reach_tile-self.global_min_ts)
+            self.priority=self.tile_props[self.delays[2].split("_")[-1]][2]
+            self.profit=(1/self.deadline)+self.priority
+            if wait_time < validity and wait_time < self.time_to_reach_tile:
+                #increase frequency
+                #self.tile_request_props[tile_name]+=1
+                #self.update_tile_frequency(tile_name)
+                #do nothing, vehicle can wait
+                total_delay=self.calculate_total_delay_without_pr(request) + wait_time
+                self.hits_with_basic.append(tile_name)
+
+                print("total delay without processing delay",total_delay)
+            else:
+                total_delay=self.calculate_total_delay_without_pr(request)+ self.time_to_reach_tile
+                self.misses_with_basic.append(tile_name)
+
+        add_row_to_csv(delay_logs_basic,self.delays)    
+        print("No. of misses with basic are ", len(self.misses_with_basic))
+        print("No. of hits with basic are ", len(self.hits_with_basic))
+        
+
+    def tobroadcast_priority(self,request):
         #to decide whether to broadcast tile or not
+        #and then schedule broadcast only when urgent.
         #request=request.decode()
         request=request.split(",")
         req_id=request[0].split(":")[1]
@@ -349,35 +634,57 @@ class RSU:
         veh_speed=request[4]
         tile_name=request[5]+','+request[6]
         req_timestamp=request[7]
-        
+        request_tile= f"{self.req_id}:{tile_name}"
+                                    
         print("tile_name inside tobroadcast",tile_name)
         if self.broadcast_channel[self.current_slot_time]==tile_name:
             #do nothing
+            if request_tile not in self.hits_with_priority:
+                self.hits_with_priority.append(tile_name)
             return
         else:
-            self.delays[0]=req_id
+            self.delays[0]=req_id 
             self.delays[1]=veh_id
             self.delays[2]=tile_name
             validity=self.get_validity_of_tile(tile_name)
             slot_when_tile_published_next=self.get_slot_when_tile_published_next(tile_name)
             wait_time=self.calculate_wait_time(slot_when_tile_published_next)
-            time_to_reach_tile=self.calculate_time_to_reach_requested_tile(request)
-            
-            if wait_time < validity and wait_time < time_to_reach_tile:
-                #increase priority
+            self.time_to_reach_tile=self.calculate_time_to_reach_requested_tile(request)
+            self.deadline=self.current_slot_time+(self.time_to_reach_tile-self.global_min_ts)
+            self.priority=self.tile_props[self.delays[2].split("_")[-1]][2]
+            self.profit=(1/self.deadline)+self.priority
+            if wait_time < validity and wait_time < self.time_to_reach_tile:
+                #increase frequency
+                #self.tile_request_props[tile_name]+=1
+                self.update_tile_frequency(tile_name)
+                if request_tile not in self.hits_with_priority:
+                    self.hits_with_priority.append(tile_name)
                 #do nothing, vehicle can wait
-                total_delay=self.calculate_total_delay_without_pr(request)
-
+                total_delay=self.calculate_total_delay_without_pr(request)+ wait_time
                 print("total delay without processing delay",total_delay)
             else:
                 #TO DO:search for a slot before the validity expires
                 #weighted job scheduling greedy algo
+                #slot=schedule the tile
+                #if the tile is scheduled immediately, loss of tile and probably urgent tiles.
+                #disadvantage: pcd overrides osm data.
+                #no. of osm overrides.
+                #vehicle move forward.. or not--animation style.
                 print("tile replaced this tile %s by this tile%s in slot %s",self.broadcast_channel[self.current_slot_time],tile_name, self.current_slot_time)
-                self.add_tile_to_current_slot(tile_name)#urgent scheduling
-
+                #self.add_tile_to_current_slot(tile_name)#urgent scheduling
+                ##self.add_tile_to_slot_based_on_priority(tile_name, self.get_slot_based_on_priority(request)[0][])
+                self.add_tile_to_jobs_list_based_on_priority(request)
+                self.schedule_tile_at_slot()
                 print("Total delay",self.calculate_total_delay_with_pr(request))
 
-            add_row_to_csv(delays_logs_csv,self.delays)
+        add_row_to_csv(delay_logs_priority,self.delays)
+        print("No. of misses with priority are ", len(self.misses_with_priority))
+        count_osm = sum(1 for item in self.misses_with_priority if item.endswith("osm"))
+        count_pcd = sum(1 for item in self.misses_with_priority if item.endswith("pcd"))
+        print("No. of pcd misses and osm misses respectively are", count_pcd, " ", count_osm)
+        print("No. of hits with priority are ", len(self.hits_with_priority))
+        
+
         print()
 
     async def _handle_request(self, request):
@@ -387,8 +694,11 @@ class RSU:
         if self.global_min_ts==-1:
             self.global_min_ts=int(float(request.split(",")[7]))
         self.current_slot_time=((int(float(request.split(",")[7]))-self.global_min_ts)%200)+1
+        
         print(self.current_slot_time)
-        self.tobroadcast(request)
+        #self.tobroadcast_basic(request)
+        #self.tobroadcast_greedy(request)
+        self.tobroadcast_priority(request)
         response = b""
         return response
 
@@ -406,9 +716,14 @@ class RSU:
 def main(id,sip,sport,algo,pattern):
     # rsu = RSU(1,'127.0.0.1',5555,'flat','block')
     # Create a new CSV file
-    delay_logs_csv = 'delay_logs.csv'
+    #delay_logs_csv = 'delay_logs.csv'
+    #delay_logs_basic = 'delay_logs_basic.csv'
+    delay_logs_priority = 'delay_logs_priority.csv'
+    #delay_logs_greedy = 'delay_logs_greedy.csv'
     headers = ['Req_ID', 'Veh_ID', 'Tile_name','Tx1','P1','Pr1','Tx2','P2','Total delay','Distance']
-    create_csv_file(delay_logs_csv, headers)
+    #create_csv_file(delay_logs_basic, headers)
+    #create_csv_file(delay_logs_greedy, headers)
+    create_csv_file(delay_logs_priority, headers)
     rsu = RSU(id,sip,sport,algo,pattern)
 
     asyncio.run(rsu.run())
