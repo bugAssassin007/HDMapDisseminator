@@ -433,7 +433,7 @@ class RSU:
                 # to find an empty slot or a slot with a pcd tile
                     for slot_name, slot_tile in self.broadcast_channel.items():
                         ##TO DO: Change the condition after or, using reverse_broadcast_channel to find slot with pcd tile.
-                        if slot_tile == "" or slot_tile.split('_')[-1] == "pcd":
+                        if (slot_tile == "" or slot_tile.split('_')[-1] == "pcd") and slot_name <= deadline:
                             # Replace the tile in the slot with the current tile
                             self.replaced_tiles.append([tile_name, slot_tile])
                             self.broadcast_channel[slot_name] = tile_name
@@ -445,17 +445,18 @@ class RSU:
                                 self.hits_with_priority.append(request_tile) 
 
 
-                            # Update the tile_req_props dictionary
-                            if slot_tile != "":
-                                self.tile_req_props[slot_tile][0] -= 1
+                            # #Not the right place to update frequency of the requested tile. TO DO
+                            # # Update the tile_req_props dictionary
+                            # if slot_tile != "":
+                            #     self.tile_req_props[slot_tile][0] -= 1
 
 
-                            break
+                            
                         else:
                             # Find a slot before the deadline of type osm with lower frequency
                             current_frequency = self.tile_req_props[tile_name][0]
                             for slot_name, slot_tile in self.broadcast_channel.items():
-                                if slot_tile.split('_')[-1]=="osm" and self.tile_req_props[slot_tile][0] < current_frequency:
+                                if slot_tile.split('_')[-1]=="osm" and self.tile_req_props[slot_tile][0] < current_frequency and slot_name <= deadline:
                                     # Replace the tile in the slot with the current tile
                                     self.replaced_tiles.append([tile_name, slot_tile])
                                     self.broadcast_channel[slot_name] = tile_name
@@ -467,7 +468,7 @@ class RSU:
                                     if request_tile not in self.hits_with_priority:
                                         self.hits_with_priority.append(request_tile) 
 
-                                    break
+                                    #break
                                 else:
                                     self.cannot_be_scheduled.append(tile_name)
                                     # Set isprocessed flag to 1
@@ -476,6 +477,7 @@ class RSU:
                                     request_tile= f"{self.req_id}:{tile_name}"
                                     if request_tile not in self.misses_with_priority:
                                         self.misses_with_priority.append(request_tile) 
+                                
 
                                     
 
@@ -490,7 +492,7 @@ class RSU:
                     # Find a slot before the deadline with a pcd tile and lower frequency
                     current_frequency = self.tile_req_props[tile_name][0]
                     for slot_name, slot_tile in self.broadcast_channel.items():
-                        if slot_tile != "" and self.tile_req_props[slot_tile][0] < current_frequency:
+                        if slot_tile != "" and self.tile_req_props[slot_tile][0] < current_frequency and slot_name < deadline: 
                             # Replace the tile in the slot with the current tile
                             self.replaced_tiles.append([tile_name, slot_tile])
                             self.broadcast_channel[slot_name] = tile_name
@@ -500,7 +502,7 @@ class RSU:
                             request_tile= f"{self.req_id}:{tile_name}"
                             if request_tile not in self.hits_with_priority:
                                 self.hits_with_priority.append(request_tile) 
-                            break
+                            #break
                         else:
                             self.cannot_be_scheduled.append(tile_name)
                             # self.misses_with_priority.append(tile_name)
@@ -508,6 +510,80 @@ class RSU:
                             request_tile= f"{self.req_id}:{tile_name}"
                             if request_tile not in self.misses_with_priority:
                                 self.misses_with_priority.append(request_tile) 
+                        
+        #return
+
+    # def schedule_tile_at_slot(self):
+    #     for tile_name, job_entry in self.global_jobs.items():
+    #         priority = job_entry[0]
+    #         deadline = job_entry[1]
+    #         isscheduled = job_entry[2]
+    #         isprocessed = job_entry[3]
+
+    #         # Check if the tile has not been scheduled and is not yet processed
+    #         if isscheduled == 0 and isprocessed == 0:
+    #             tile_type = tile_name.split('_')[-1]  # Extract tile type from tile_name
+
+    #             if tile_type == "osm":
+    #                 self.schedule_osm_tile(tile_name, deadline, job_entry)
+    #             else:  # tile_type == "pcd"
+    #                 self.schedule_pcd_tile(tile_name, deadline, job_entry)
+
+    # def schedule_osm_tile(self, tile_name, deadline, job_entry):
+    #     for slot_name, slot_tile in self.broadcast_channel.items():
+    #         if (slot_tile == "" or slot_tile.split('_')[-1] == "pcd") and slot_name <= deadline:
+    #             # Replace the tile in the slot with the current tile
+    #             self.replaced_tiles.append([tile_name, slot_tile])
+    #             self.broadcast_channel[slot_name] = tile_name
+    #             job_entry[2] = 1  # Set isscheduled flag to 1
+    #             job_entry[3] = 1  # Set isprocessed flag to 1
+
+    #             request_tile = f"{self.req_id}:{tile_name}"
+    #             if request_tile not in self.hits_with_priority:
+    #                 self.hits_with_priority.append(request_tile)
+    #             break
+    #         else:
+    #             current_frequency = self.tile_req_props[tile_name][0]
+    #             for slot_name, slot_tile in self.broadcast_channel.items():
+    #                 if slot_tile.split('_')[-1] == "osm" and self.tile_req_props[slot_tile][0] < current_frequency and slot_name <= deadline:
+    #                     # Replace the tile in the slot with the current tile
+    #                     self.replaced_tiles.append([tile_name, slot_tile])
+    #                     self.broadcast_channel[slot_name] = tile_name
+    #                     job_entry[2] = 1  # Set isscheduled flag to 1
+    #                     job_entry[3] = 1  # Set isprocessed flag to 1
+
+    #                     request_tile = f"{self.req_id}:{tile_name}"
+    #                     if request_tile not in self.hits_with_priority:
+    #                         self.hits_with_priority.append(request_tile)
+    #                     break
+    #                 else:
+    #                     self.cannot_be_scheduled.append(tile_name)
+    #                     job_entry[3] = 1  # Set isprocessed flag to 1
+    #                     request_tile = f"{self.req_id}:{tile_name}"
+    #                     if request_tile not in self.misses_with_priority:
+    #                         self.misses_with_priority.append(request_tile)
+
+    # def schedule_pcd_tile(self, tile_name, deadline, job_entry):
+    #     current_frequency = self.tile_req_props[tile_name][0]
+    #     for slot_name, slot_tile in self.broadcast_channel.items():
+    #         if  slot_tile != "" or (slot_tile.split('_')[-1] == "pcd" and self.tile_req_props[slot_tile][0] < current_frequency) and slot_name < deadline:
+    #             # Replace the tile in the slot with the current tile
+    #             self.replaced_tiles.append([tile_name, slot_tile])
+    #             self.broadcast_channel[slot_name] = tile_name
+    #             job_entry[2] = 1  # Set isscheduled flag to 1
+    #             job_entry[3] = 1  # Set isprocessed flag to 1
+
+    #             request_tile = f"{self.req_id}:{tile_name}"
+    #             if request_tile not in self.hits_with_priority:
+    #                 self.hits_with_priority.append(request_tile)
+    #             break
+    #         else:
+    #             self.cannot_be_scheduled.append(tile_name)
+    #             job_entry[3] = 1  # Set isprocessed flag to 1
+    #             request_tile = f"{self.req_id}:{tile_name}"
+    #             if request_tile not in self.misses_with_priority:
+    #                 self.misses_with_priority.append(request_tile)
+
 
 
 
@@ -620,14 +696,25 @@ class RSU:
         print("No. of misses with basic are ", len(self.misses_with_basic))
         print("No. of hits with basic are ", len(self.hits_with_basic))
         
+    def find_duplicates(self,input_list):
+        seen = set()
+        duplicates = set()
 
+        for item in input_list:
+            if item in seen:
+                duplicates.add(item)
+            else:
+                seen.add(item)
+
+        return list(duplicates)
+    
     def tobroadcast_priority(self,request):
         #to decide whether to broadcast tile or not
         #and then schedule broadcast only when urgent.
         #request=request.decode()
         request=request.split(",")
-        req_id=request[0].split(":")[1]
-        print("Request id",req_id)
+        self.req_id=request[0].split(":")[1]
+        print("Request id",self.req_id)
         veh_id=request[1]
         veh_lat=request[2]
         veh_long=request[3]
@@ -640,10 +727,10 @@ class RSU:
         if self.broadcast_channel[self.current_slot_time]==tile_name:
             #do nothing
             if request_tile not in self.hits_with_priority:
-                self.hits_with_priority.append(tile_name)
-            return
+                self.hits_with_priority.append(request_tile)
+            
         else:
-            self.delays[0]=req_id 
+            self.delays[0]=self.req_id 
             self.delays[1]=veh_id
             self.delays[2]=tile_name
             validity=self.get_validity_of_tile(tile_name)
@@ -653,15 +740,18 @@ class RSU:
             self.deadline=self.current_slot_time+(self.time_to_reach_tile-self.global_min_ts)
             self.priority=self.tile_props[self.delays[2].split("_")[-1]][2]
             self.profit=(1/self.deadline)+self.priority
-            if wait_time < validity and wait_time < self.time_to_reach_tile:
+            self.update_tile_frequency(tile_name)
+            if wait_time < self.time_to_reach_tile:
+                #TO DO: Understand why a check of wait_time with validity is needed, removing this check for now.
                 #increase frequency
                 #self.tile_request_props[tile_name]+=1
-                self.update_tile_frequency(tile_name)
+                
                 if request_tile not in self.hits_with_priority:
-                    self.hits_with_priority.append(tile_name)
+                    self.hits_with_priority.append(request_tile)
                 #do nothing, vehicle can wait
                 total_delay=self.calculate_total_delay_without_pr(request)+ wait_time
                 print("total delay without processing delay",total_delay)
+                #return
             else:
                 #TO DO:search for a slot before the validity expires
                 #weighted job scheduling greedy algo
@@ -675,7 +765,8 @@ class RSU:
                 ##self.add_tile_to_slot_based_on_priority(tile_name, self.get_slot_based_on_priority(request)[0][])
                 self.add_tile_to_jobs_list_based_on_priority(request)
                 self.schedule_tile_at_slot()
-                print("Total delay",self.calculate_total_delay_with_pr(request))
+                total_delay=self.calculate_total_delay_with_pr(request)
+                print("Total delay",total_delay)
 
         add_row_to_csv(delay_logs_priority,self.delays)
         print("No. of misses with priority are ", len(self.misses_with_priority))
@@ -683,7 +774,27 @@ class RSU:
         count_pcd = sum(1 for item in self.misses_with_priority if item.endswith("pcd"))
         print("No. of pcd misses and osm misses respectively are", count_pcd, " ", count_osm)
         print("No. of hits with priority are ", len(self.hits_with_priority))
-        
+        print(self.misses_with_priority)
+        #print(self.hits_with_priority)
+
+        print(self.find_duplicates(self.misses_with_priority))
+        print(self.find_duplicates(self.hits_with_priority))
+
+
+        common_elements = set(self.hits_with_priority) & set(self.misses_with_priority)
+        print("common elements",common_elements)
+
+
+        # File path where you want to write the list
+        file_path = 'hits_and_misses.txt'
+
+        # Open the file in append mode ('a' mode) to add the list to the file
+        with open(file_path, 'a') as file:
+            # Convert the list elements to strings and join them with a separator (e.g., a comma)
+            list_str = ','.join(map(str, self.hits_with_priority))
+            
+            # Write the list string to the file
+            file.write(list_str + '\n')
 
         print()
 
