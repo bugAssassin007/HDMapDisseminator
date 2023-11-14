@@ -72,6 +72,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
     return distance*1000
 
+
 class RSU:
     def __init__(self,id,  sip,sport,algo,pattern):
         self.sip=sip
