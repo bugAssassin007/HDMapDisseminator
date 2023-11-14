@@ -4,9 +4,10 @@ import csv
 import numpy as np
 import pandas as pd
 import time
+import threading
 
 #tile_props={"format/tile_type":["size(in units of cache)","validity(in seconds)"]}
-tile_props={"osm":[1,2],"pcd":[2,2],"pcd_mid":[2,2]}
+tile_props={"osm":[1,5],"pcd":[2,1],"pcd_mid":[2,2]}
 
 
 class Vehicle:
@@ -18,6 +19,7 @@ class Vehicle:
         self.input_file = input_file
         self.veh_cache={}
         self.max_length=cache_size
+        self.payload=""
 
     async def send_request(self, request):
 
@@ -25,6 +27,7 @@ class Vehicle:
         context = zmq.asyncio.Context()
         socket = context.socket(zmq.REQ)
         socket.connect('tcp://%s:%s'%(self.pip,self.pport))
+        print("request sent is",request)
         await socket.send(request)
 
         #request is sent every second
@@ -50,8 +53,9 @@ class Vehicle:
 
     def isTileValid(self,tile):
         #Fetch the tiles list for a vehicle ID
+        #print("self.id",self.id)
         tiles=self.veh_cache[self.id]
-        print("tiles in vehicle", tiles)
+        print("tiles for vehicle {self.id}:", tiles)
         #Iterate through all tiles in the cache for a vehicle ID
         #t[0] since veh_cache={vehicle_id:[tile_name, tiled_time],[],..maxlength}
         for t in tiles:
@@ -67,103 +71,176 @@ class Vehicle:
         
         #remainingTime = currentTime-tiledTime
         timePassed = currentTime-tiledTime
+        print("Time passed=",timePassed)
+        print("Tiled time", tiledTime)
+        print("for tile",tile)
+        print("validity=", tile_props[type][1])
                 
         #If tile validity is greater than the remaining time, return True, else return False
-        if(tile_props[type][1] - timePassed > 0):
+        #if(tile_props[type][1] - timePassed > 0):
+        #print("if timePassed>=tile_props[type][1]?")
+        if(timePassed<tile_props[type][1]):
             #print("Tile valid returned!")
             return True
         else:
             #print("Tile invalid returned!")
             return False
         
-    async def update_cache(self, vehicle_id, tile_name, max_length, time_step, payload):
+    def remove_tile_from_cache(self, vehicle_id, tile_name):
+        # Check if the vehicle_id exists in the cache
+        if vehicle_id in self.veh_cache:
+            # Get the list of tiles for the given vehicle_id
+            tiles_for_vehicle = self.veh_cache[vehicle_id]
 
-
-        print(self.veh_cache)
+            # Iterate through the list of tiles for the vehicle_id
+            for tile in tiles_for_vehicle:
+                if tile[0] == tile_name:
+                    # Remove the tile from the list
+                    tiles_for_vehicle.remove(tile)
+                    print(f"Tile '{tile_name}' removed from cache for vehicle_id '{vehicle_id}'.")
+                    return
+            #print(f"Tile '{tile_name}' not found in cache for vehicle_id '{vehicle_id}'.")
+        else:
+            print(f"Vehicle ID '{vehicle_id}' not found in cache.")
+        
+    async def update_cache(self, vehicle_id, tile_name, max_length, time_step):
+        print()
+        print("------------------------------------------------------------------------------------------------------------")
+        print("Update cache called with the row and tile",time_step,tile_name)
+        print("This is cache ....",self.veh_cache)
 
         #Get the current timestamp
         curr_timestamp = time.time()
+        isVehiclePresent = False
+        isTilePresent= False
+        if vehicle_id in self.veh_cache:
+            isVehiclePresent=True
+            for tile in self.veh_cache[vehicle_id]:
+                #print("tile present in cachetile_name)
+                if tile[0] == tile_name:
+                    isTilePresent=True
+            
+
+    
 
         
         # check if vehicle_id exists in cache
         
-        if vehicle_id in self.veh_cache :
+        #if vehicle_id in self.veh_cache :
 
             #Iterate over all tiles in the cache for that vehicle ID, to check if the tile exists
-            for tile in self.veh_cache[vehicle_id]:
+            #for tile in self.veh_cache[vehicle_id]:
 
                 # check if tile already exists in cache
-                if tile[0] == tile_name:
-
-                    #print("Tile in if exists",tile_name)
-
-                    if self.isTileValid(tile_name):
-                        
-                        #print("Tile in if exists and is valid",tile_name)
-                        # do nothing if tile already exists in cache
-                        return 
+                #if tile[0] == tile_name:
+        
+        if isVehiclePresent: 
+            if isTilePresent:
+                print("Tile in if exists",tile_name)
+                print("Is tile valid?",self.isTileValid(tile_name))
+                if self.isTileValid(tile_name):
                     
-                    else:
-
-                        #print("Tile in if exists but invalid",tile_name)
-                        #If tile exists in cache, but is invalid, request RSU for the tile
-                        
-                        #Create the payload to be sent to the RSU, by appending the tile_name and the time at which the request is being sent
-                        payload=payload+','+tile_name+','+str(time.time())
-
-                        await self.client(payload)
-
-                        #Requesting RSU for tile due to invalidity!
-                        if len(self.veh_cache[vehicle_id]) >= max_length:
-                            #print("Tile in if exists but invalid and no space in cache",tile_name)
-
-                            # remove the least recently used tile, removing the first stored tile.
-                            self.veh_cache[vehicle_id].pop(0)
-
-                            # add the new tile to cache
-                            self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
-
-                            #TO DO: Check if sorting is required to fetch the least recently used.
-                        else:
-
-                            #create a new entry for vehicle_id in cache
-                            #send a request to the RSU
-                            #print("Tile in if exists but invalid and has space in cache",tile_name)
-                            #add the new tile to cache
-                            self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+                    print("Tile exists and is valid",tile_name)
+                    # do nothing if tile already exists in cache and is valid
+                    #since a request is not sent to the RSU in the case where tile is present and valid, the hits are not counted in this case
+                    #hence count them here and then add it to the hits in the RSU
+                    hits_count=0
+                    hits_count=hits_count+1
+                    print("Vehicle additional hits", hits_count)
+                    #return 
+                
                 else:
+
+                    #print("Tile in if exists but invalid",tile_name)
+                    #If tile exists in cache, but is invalid, request RSU for the tile
                     
                     #Create the payload to be sent to the RSU, by appending the tile_name and the time at which the request is being sent
-                    #print("Tile in if not in cache",tile_name)
-                    payload=payload+','+tile_name+','+str(time.time())
-                    #print("Inside tile not exists in cache!")
-                    await self.client(payload)
+                    self.payload=self.payload+','+tile_name+','+str(time.time())
+                    #print("")
+                    await self.client(self.payload)
 
-                    
-                    #print("Requesting RSU for tile due to absence of tile in cache!")
-                    # add the new tile to cache
-                    if len(self.veh_cache[vehicle_id]) == max_length:
-                        # remove the least recently used tile
-                        #print("Tile in not exists in cache and no space in cache",tile_name)
+                    #Requesting RSU for tile due to invalidity!
+                    current_length=0
+                    for tile in self.veh_cache[vehicle_id]:
+                        #print("tile present in cachetile_name)
+                        #if tile[0] == tile_name:
+                        type = tile[0].split('_')[-1]
+                        current_length=current_length+(1*tile_props[type][0])
+                    type = tile_name.split('_')[-1]
+                    print("Tile props",tile_props[type][0])
+                    print("max length", max_length)
+                    print("length of the current cache",current_length)
+                    if current_length+ tile_props[type][0]> max_length:
+                        print("Tile exists but invalid and no space in cache",tile_name)
+
+                        # remove the least recently used tile, removing the first stored tile.
                         self.veh_cache[vehicle_id].pop(0)
+                        print("popped 1....")
 
                         # add the new tile to cache
                         self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+
+                        #TO DO: Check if sorting is required to fetch the least recently used.
                     else:
-                        # create a new entry for vehicle_id in cache
+
+                        #create a new entry for vehicle_id in cache
                         #send a request to the RSU
-                        #print("Tile in if exists but invalid and has space in cache",tile_name)
-                        # add the new tile to cache
+                        print("Tile in if exists but invalid and has space in cache",tile_name)
+                        self.remove_tile_from_cache(vehicle_id, tile_name)
+                        #add the new tile to cache
+
                         self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
-        else:
+            else:
+                
+                #Create the payload to be sent to the RSU, by appending the tile_name and the time at which the request is being sent
+                #print("Tile in if not in cache",tile_name)
+                self.payload=self.payload+','+tile_name+','+str(time.time())
+                print("Inside tile not exists in cache!")
+                await self.client(self.payload)
+
+                
+                #print("Requesting RSU for tile due to absence of tile in cache!")
+                
+                
+                current_length=0
+                for tile in self.veh_cache[vehicle_id]:
+                    #print("tile present in cachetile_name)
+                    #if tile[0] == tile_name:
+                    type = tile[0].split('_')[-1]
+                    current_length=current_length+(1*tile_props[type][0])
+                type = tile_name.split('_')[-1]
+                print("Tile props",tile_props[type][0])
+                print("max length", max_length)
+                print("length of the current cache",current_length)
+                # add the new tile to cache
+                if current_length + tile_props[type][0]>max_length: ##$$checking correct? it was double equal to earlier
+                    # remove the least recently used tile
+                    print("The length of the cache is",len(self.veh_cache[vehicle_id]))
+                    print("Tile in not exists in cache and no space in cache",tile_name)
+                    self.veh_cache[vehicle_id].pop(0)
+                    print("popped 2...")
+
+                    # add the new tile to cache
+                    self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+                else:
+                    # create a new entry for vehicle_id in cache
+                    #send a request to the RSU
+                    print("Tile does not exist and has space in cache",tile_name)
+                    #TO DO: WHy are u removing when there is space in the cache...I Think because its invalid
+                    #self.remove_tile_from_cache(vehicle_id, tile[0])
+                    # add the new tile to cache
+                    self.veh_cache[vehicle_id].append([tile_name, curr_timestamp])
+                    print("Added to cache",self.veh_cache)
+        if not isVehiclePresent:
             #If a new vehicle is added, then request for that tile
             #print("Tile in if new vehicle addded",tile_name)
-            payload=payload+','+tile_name+','+str(time.time())
-            #print("Inside tile not exists in cache!")
-            await self.client(payload)
+            self.payload=self.payload+','+tile_name+','+str(time.time())
+            print("Inside tile not exists in cache!")
+            await self.client(self.payload)
 
             #TO DO: Check if there is a drastic change in calculation of the current timestamp upwards and here.
             self.veh_cache[vehicle_id] = [[tile_name, curr_timestamp]]
+            print("Added to cache",self.veh_cache)
         
 
     #Function takes in latitudes, longitudes and matrix shape and gives i, j for a matrix where a particular point lies
@@ -217,24 +294,43 @@ class Vehicle:
 
     async def main(self):
         
-        self.add_indices_to_csv('short_datatotest.csv', (10, 10))
-        with open('sumo_longtrace.csv') as csv_file:
+        #self.add_indices_to_csv('short_datatotest.csv', (10, 10))
+        #self.add_indices_to_csv('sumonew2_latlong.csv', (10, 10))
+        #self.add_indices_to_csv('sumo_data.csv', (10, 10))
+        #with open('sumo_longtrace.csv') as csv_file:
+        # with open('sumonew2_latlong.csv') as csv_file:
+        with open('sumonew2_latlong_backup.csv') as csv_file:
             csv_reader = csv.reader(csv_file, delimiter=',')
             next(csv_reader)
             for row in csv_reader:
-                payload="row:"+row[9]+','+row[1]+','+row[4]+','+row[5]+','+row[6]
-                #print(payload)
-                time_step=row[0]
-                #vehicle_id = row[1]
-                self.id = row[1]
-                #print("vehicle id:",self.id)
-                tile = row[7]
-                lst = eval(tile)
-                #print("This is list",lst)
-                for i in range(2):
-                    #print("This is list",lst[i])
+                
+                if len(row) > 0:
+                    print("this is row[0]", row[0])
+                
+                    time_step=row[0]
+                    #vehicle_id = row[1]
+                    self.id = row[1]
+                    #print("vehicle id:",self.id)
+                    tile = row[7]
+                    lst = eval(tile)
+                    #print("This is list",lst)
+                    #Adding request number for .osm layer and .pcd layer
+                    for i in range(2):
+                        #print("This is list",lst[i])
+                        #print("Request number is=")
+                        if i==0:
 
-                    await self.update_cache(self.id, lst[i], self.max_length,time_step,payload)
+                            reqnbr= str(int(row[9])+(int(row[9])-1))
+                        else:
+                            reqnbr=str(int(row[9])*2)
+                        #For both add the request in the format row:requestnumber,vehicle_id,Lat,Long,Speed
+                        self.payload="row:"+reqnbr+','+row[1]+','+row[4]+','+row[5]+','+row[6]
+                        #check if present in cache or else send the payload as request to fetch that tile
+                        await self.update_cache(self.id, lst[i], self.max_length,reqnbr)
+                        #print("Done reading file...")
+                else:
+                    print("Row has no elements.")
+                    return
 
 def main(id,pip,pport,cache_size,input_file):
     #vehicle1 = Vehicle(1,'127.0.0.1',5555,'hello')
@@ -248,3 +344,7 @@ def main(id,pip,pport,cache_size,input_file):
 #     vehicle1 = Vehicle(1,'127.0.0.1',5555,'hello')
 #     asyncio.run(vehicle1.main())
 #Vehicle(int id, const std::string& pip, const std::string& pport, int cache_size, const std::string& input_file)
+
+# if __name__ == "__main__":
+#     for i in range(5):
+#         threading.Thread(target=main, args=(1, '127.0.0.1', 5555, 'hello', 'sumonew2_latlong.csv')).start()

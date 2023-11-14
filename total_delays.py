@@ -127,7 +127,7 @@ def plot_total_delay(data):
     plt.show()
 
 # Read the CSV file
-data = read_csv_file('delay_logs.csv')
+data = read_csv_file('delay_logs_basic_original.csv')
 
 # Plot the graph
 plot_total_delay(data)
