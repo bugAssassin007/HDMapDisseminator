@@ -6,7 +6,7 @@ Welcome to HDMapDisseminator, a tool designed for the efficient dissemination of
 
 To simulate a vehicle within the network, use the following command:
 
-python3 main.py vehicle --id 1 --pip 127.0.0.1 --pport 5502 --cache_size 2 --input_file "requests.csv"
+```python3 main.py vehicle --id 1 --pip 127.0.0.1 --pport 5502 --cache_size 2 --input_file "requests.csv"```
 
 
 ### Configuration Parameters:
@@ -20,7 +20,7 @@ python3 main.py vehicle --id 1 --pip 127.0.0.1 --pport 5502 --cache_size 2 --inp
 
 To initiate a Road-Side Unit (RSU), use the following command:
 
-python3 main.py rsu --id 1 --sip 127.0.0.1 --sport 5502 --algo flat --pattern alternate
+```python3 main.py rsu --id 1 --sip 127.0.0.1 --sport 5502 --algo flat --pattern alternate```
 
 
 ### Configuration Parameters:
